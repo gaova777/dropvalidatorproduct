@@ -39,6 +39,9 @@ yarn-error.log*
 # claude code internals
 .claude/
 
+# screenshots compartidos para debug — privados
+/screenshot/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

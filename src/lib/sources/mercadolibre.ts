@@ -11,6 +11,15 @@
 const BASE_URL = "https://api.mercadolibre.com";
 const DEFAULT_TIMEOUT_MS = 8000;
 
+/**
+ * Mercado Libre rechaza requests desde IPs cloud (Vercel, AWS) sin un
+ * User-Agent de navegador o sin OAuth token. Mandamos un UA realista para
+ * pasar el filtro anti-bot básico. Si esto deja de funcionar habrá que
+ * registrar una app y usar Bearer token.
+ */
+const USER_AGENT =
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
 export const COUNTRY_TO_SITE: Record<string, string> = {
   Colombia: "MCO",
   Argentina: "MLA",
@@ -88,9 +97,15 @@ async function fetchJson<T>(url: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promis
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    const token = process.env.MERCADOLIBRE_ACCESS_TOKEN;
     const res = await fetch(url, {
       signal: controller.signal,
-      headers: { Accept: "application/json" },
+      headers: {
+        Accept: "application/json",
+        "User-Agent": USER_AGENT,
+        "Accept-Language": "es-CO,es;q=0.9,en;q=0.8",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
     });
     if (!res.ok) {
       throw new MercadoLibreError(

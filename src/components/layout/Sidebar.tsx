@@ -42,8 +42,8 @@ export function Sidebar() {
           })}
         </nav>
         <div className="mt-auto text-xs text-muted-foreground">
-          <p className="font-mono">v0.2.0</p>
-          <p>Data-driven · Mercado Libre</p>
+          <p className="font-mono">v0.3.0</p>
+          <p>Data-driven · ML + Trends</p>
         </div>
       </aside>
 

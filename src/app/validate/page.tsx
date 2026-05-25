@@ -13,8 +13,9 @@ export default function ValidatePage() {
         </p>
         <h1 className="text-3xl font-semibold">Validá tu próximo producto</h1>
         <p className="text-sm text-muted-foreground">
-          Datos reales de Mercado Libre Colombia — ventas, listings, sellers,
-          precios. Sin IA, sin alucinaciones. Vos sumás el cálculo financiero.
+          Datos reales de Mercado Libre Colombia + Google Trends — ventas,
+          listings, sellers, interés histórico y tendencia. Sin IA, sin
+          alucinaciones. Vos sumás el cálculo financiero.
         </p>
       </header>
 

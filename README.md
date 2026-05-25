@@ -65,11 +65,25 @@ Un LLM "validando" un producto inventa scores subjetivos basados en snippets de 
 
 | Fase | Fuente | Estado |
 | --- | --- | --- |
-| **Demanda** | `sold_quantity` agregado del top 50 de Mercado Libre | ✅ Activo |
+| **Demanda** | `sold_quantity` de Mercado Libre + interés 12m + ratio 3m/9m de Google Trends | ✅ Activo |
 | **Competencia** | `total_listings` + sellers únicos + concentración | ✅ Activo |
 | **Proveedor** | % envío gratis, condición nuevo, sellers únicos, rango de precio | ✅ Activo (proxy) |
 | **Viralidad** | TikTok Creative Center | ⏳ Pendiente (Fase 3) |
 | **Financiero** | Calculadora con devoluciones + COGS + flete | ✅ Activo |
+
+### ⚠️ OAuth de Mercado Libre
+
+ML bloquea con HTTP 403 cualquier IP cloud (Vercel/AWS) que no traiga OAuth Bearer token. Para que la app funcione en producción:
+
+1. Andá a https://developers.mercadolibre.com.co/devcenter
+2. **Crear aplicación** — cualquier nombre, callback URL dummy (`https://drop-validator-product.vercel.app`)
+3. Copiá **App ID** y **Secret Key**
+4. En Vercel → Settings → Environment Variables, agregá:
+   - `MERCADOLIBRE_CLIENT_ID` = el App ID
+   - `MERCADOLIBRE_CLIENT_SECRET` = la Secret Key
+5. Redeploy
+
+El cliente hace `grant_type=client_credentials` y cachea el token 6h en memoria del lambda. Sin estas vars, Google Trends sigue funcionando solo como demanda (la app no se rompe, solo pierde precisión).
 
 ## Modelo de scoring
 
@@ -106,8 +120,8 @@ Veredicto:
 
 ## Roadmap
 
-- [x] **Fase 1**: Mercado Libre Colombia para demand/competition/supplier
-- [ ] **Fase 2**: Google Trends (estacionalidad + tendencia 12m)
+- [x] **Fase 1**: Mercado Libre Colombia para demand/competition/supplier (con OAuth)
+- [x] **Fase 2**: Google Trends (estacionalidad + tendencia 12m vs 3m)
 - [ ] **Fase 3**: TikTok Creative Center scraper para virality
 - [ ] **Fase 4**: Dropi API para supplier real (requiere cuenta + key)
 - [ ] **Fase 5**: Meta Ads Library para validar competencia publicitaria

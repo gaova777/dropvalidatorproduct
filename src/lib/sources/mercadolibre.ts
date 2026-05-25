@@ -1,9 +1,15 @@
 /**
  * Cliente para api.mercadolibre.com.
  *
- * Endpoints públicos (no requieren OAuth):
- *   GET /sites/{site_id}/search?q=...
- *   GET /trends/{site_id}
+ * Mercado Libre bloquea con 403 cualquier request desde IPs cloud (Vercel/AWS)
+ * que no traiga OAuth Bearer token. Soportamos dos modos:
+ *
+ *   1. MERCADOLIBRE_ACCESS_TOKEN (token estático, fácil pero caduca a las 6h)
+ *   2. MERCADOLIBRE_CLIENT_ID + MERCADOLIBRE_CLIENT_SECRET (auto-refresh via
+ *      grant_type=client_credentials — modo recomendado para producción).
+ *
+ * Para obtener las credenciales: https://developers.mercadolibre.com.co/ →
+ * "Crear aplicación" → copiar App ID y Secret Key a las env vars de Vercel.
  *
  * Site IDs: MCO=Colombia, MLA=Argentina, MLM=México, MLC=Chile, MPE=Perú.
  */
@@ -11,14 +17,16 @@
 const BASE_URL = "https://api.mercadolibre.com";
 const DEFAULT_TIMEOUT_MS = 8000;
 
-/**
- * Mercado Libre rechaza requests desde IPs cloud (Vercel, AWS) sin un
- * User-Agent de navegador o sin OAuth token. Mandamos un UA realista para
- * pasar el filtro anti-bot básico. Si esto deja de funcionar habrá que
- * registrar una app y usar Bearer token.
- */
 const USER_AGENT =
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+// Cache del token en memoria del lambda (sobrevive entre invocaciones tibias).
+interface CachedToken {
+  token: string;
+  expiresAt: number; // epoch ms
+}
+let tokenCache: CachedToken | null = null;
+const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000; // refrescar 5 min antes
 
 export const COUNTRY_TO_SITE: Record<string, string> = {
   Colombia: "MCO",
@@ -93,11 +101,60 @@ export class MercadoLibreError extends Error {
   }
 }
 
+async function getAccessToken(): Promise<string | null> {
+  const staticToken = process.env.MERCADOLIBRE_ACCESS_TOKEN;
+  if (staticToken) return staticToken;
+
+  const clientId = process.env.MERCADOLIBRE_CLIENT_ID;
+  const clientSecret = process.env.MERCADOLIBRE_CLIENT_SECRET;
+  if (!clientId || !clientSecret) return null;
+
+  if (tokenCache && tokenCache.expiresAt - Date.now() > TOKEN_REFRESH_MARGIN_MS) {
+    return tokenCache.token;
+  }
+
+  const body = new URLSearchParams({
+    grant_type: "client_credentials",
+    client_id: clientId,
+    client_secret: clientSecret,
+  });
+
+  const res = await fetch(`${BASE_URL}/oauth/token`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
+      "User-Agent": USER_AGENT,
+    },
+    body: body.toString(),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new MercadoLibreError(
+      `OAuth token endpoint respondió ${res.status}: ${text.slice(0, 200)}`,
+      res.status,
+    );
+  }
+
+  const data = (await res.json()) as {
+    access_token: string;
+    expires_in: number;
+  };
+
+  tokenCache = {
+    token: data.access_token,
+    expiresAt: Date.now() + data.expires_in * 1000,
+  };
+
+  return tokenCache.token;
+}
+
 async function fetchJson<T>(url: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const token = process.env.MERCADOLIBRE_ACCESS_TOKEN;
+    const token = await getAccessToken();
     const res = await fetch(url, {
       signal: controller.signal,
       headers: {
@@ -108,8 +165,12 @@ async function fetchJson<T>(url: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promis
       },
     });
     if (!res.ok) {
+      const hint =
+        res.status === 403 && !token
+          ? " — la API requiere OAuth desde IPs cloud. Configurá MERCADOLIBRE_CLIENT_ID y MERCADOLIBRE_CLIENT_SECRET en Vercel (ver README)."
+          : "";
       throw new MercadoLibreError(
-        `Mercado Libre respondió ${res.status} para ${url}`,
+        `Mercado Libre respondió ${res.status}${hint}`,
         res.status,
       );
     }

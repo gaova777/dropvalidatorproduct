@@ -1,10 +1,16 @@
 import { NextResponse } from "next/server";
 import { searchAggregate, MercadoLibreError } from "@/lib/sources/mercadolibre";
 import {
+  getInterestOverTime,
+  GoogleTrendsError,
+} from "@/lib/sources/google-trends";
+import {
   calculatePhasesScore,
+  enrichDemandWithTrends,
   getVerdict,
   scoreCompetition,
   scoreDemand,
+  scoreDemandFromTrends,
   scoreSupplier,
   scoreVirality,
 } from "@/lib/scoring";
@@ -43,40 +49,63 @@ export async function POST(request: Request) {
     );
   }
 
-  // 1. Consultar Mercado Libre del país (una sola llamada).
+  // 1. Disparar ML y Trends en paralelo. Cada uno puede fallar independiente.
+  const [mlSettled, trendsSettled] = await Promise.allSettled([
+    searchAggregate(product, country, { limit: 50 }),
+    getInterestOverTime(product, country),
+  ]);
+
+  const mlAgg = mlSettled.status === "fulfilled" ? mlSettled.value : null;
+  const mlError =
+    mlSettled.status === "rejected"
+      ? errorMessage(mlSettled.reason, MercadoLibreError)
+      : null;
+
+  const trends = trendsSettled.status === "fulfilled" ? trendsSettled.value : null;
+  const trendsError =
+    trendsSettled.status === "rejected"
+      ? errorMessage(trendsSettled.reason, GoogleTrendsError)
+      : null;
+
+  // 2. Construir cada fase con fallback inteligente.
   let demand: PhaseResult;
-  let competition: PhaseResult;
-  let supplier: PhaseResult;
-
-  try {
-    const agg = await searchAggregate(product, country, { limit: 50 });
-    demand = scoreDemand(agg);
-    competition = scoreCompetition(agg);
-    supplier = scoreSupplier(agg);
-  } catch (err) {
-    const message =
-      err instanceof MercadoLibreError
-        ? err.message
-        : err instanceof Error
-          ? err.message
-          : "Error desconocido consultando Mercado Libre";
-
-    const errorPhase: PhaseResult = {
-      score: 5,
-      status: "error",
-      analysis: `No se pudo obtener datos: ${message}`,
-      error: message,
-    };
-    demand = errorPhase;
-    competition = errorPhase;
-    supplier = errorPhase;
+  if (mlAgg) {
+    demand = enrichDemandWithTrends(scoreDemand(mlAgg), trends);
+  } else {
+    const trendsOnly = scoreDemandFromTrends(trends);
+    if (trendsOnly) {
+      demand = trendsOnly;
+    } else {
+      demand = {
+        score: 5,
+        status: "error",
+        analysis: `Ni Mercado Libre ni Google Trends devolvieron datos. ${mlError ?? ""} ${trendsError ?? ""}`.trim(),
+        error: mlError ?? trendsError ?? "sin_datos",
+      };
+    }
   }
 
-  // 2. Virality: pendiente hasta integración TikTok.
+  const competition: PhaseResult = mlAgg
+    ? scoreCompetition(mlAgg)
+    : {
+        score: 5,
+        status: "error",
+        analysis: `Sin datos de Mercado Libre no se puede medir competencia. ${mlError ?? ""}`.trim(),
+        error: mlError ?? "sin_ml",
+      };
+
+  const supplier: PhaseResult = mlAgg
+    ? scoreSupplier(mlAgg)
+    : {
+        score: 5,
+        status: "error",
+        analysis: `Sin datos de Mercado Libre no se puede inferir disponibilidad de proveedor. ${mlError ?? ""}`.trim(),
+        error: mlError ?? "sin_ml",
+      };
+
   const virality = scoreVirality();
 
   const phases: ValidationPhases = { demand, competition, virality, supplier };
-
   const totalScore = calculatePhasesScore(phases);
   const verdict = getVerdict(totalScore);
 
@@ -122,4 +151,13 @@ export async function POST(request: Request) {
   }
 
   return NextResponse.json(response);
+}
+
+function errorMessage<T extends Error>(
+  reason: unknown,
+  ExpectedClass: new (...args: never[]) => T,
+): string {
+  if (reason instanceof ExpectedClass) return reason.message;
+  if (reason instanceof Error) return reason.message;
+  return String(reason);
 }

@@ -1,8 +1,10 @@
 import type { MLSearchAggregate } from "./sources/mercadolibre";
+import type { TrendsTimeline } from "./sources/google-trends";
 import type {
   MarginData,
   MarginResult,
   PhaseKey,
+  PhaseMetric,
   PhaseResult,
   ValidationPhases,
   Verdict,
@@ -85,6 +87,98 @@ export function getVerdict(score: number): Verdict {
 // ─────────────────────────────────────────────────────────────────────────────
 // Scorers data-driven (sin LLM)
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Score parcial a partir SOLO de Google Trends (cuando ML falla o no hay datos).
+ * Devuelve null si Trends también está vacío.
+ */
+export function scoreDemandFromTrends(trends: TrendsTimeline | null): PhaseResult | null {
+  if (!trends || trends.sample_size === 0) return null;
+
+  const avg = trends.overall_avg;
+  let base: number;
+  if (avg <= 5) base = 1.5;
+  else if (avg <= 15) base = 3.5;
+  else if (avg <= 35) base = 5.5;
+  else if (avg <= 60) base = 7.5;
+  else base = 9;
+
+  const growthAdj = trendGrowthAdjustment(trends.growth_ratio);
+  const score = clamp(1, 10, base + growthAdj);
+
+  return {
+    score: roundOne(score),
+    status: "ok",
+    analysis: buildTrendsOnlyDemandAnalysis(trends),
+    metrics: trendsMetrics(trends),
+  };
+}
+
+/**
+ * Combina el score de ML con la dimensión temporal de Google Trends.
+ * Si Trends está disponible, ajusta el score y suma métricas crudas
+ * (interés promedio 12m, ratio de crecimiento, pico estacional).
+ */
+export function enrichDemandWithTrends(
+  mlPhase: PhaseResult,
+  trends: TrendsTimeline | null,
+): PhaseResult {
+  if (!trends || trends.sample_size === 0) return mlPhase;
+  if (mlPhase.status !== "ok") return mlPhase;
+
+  const growthAdj = trendGrowthAdjustment(trends.growth_ratio);
+  const newScore = clamp(1, 10, mlPhase.score + growthAdj);
+
+  const trendNote = buildTrendNote(trends);
+  const analysis = `${mlPhase.analysis} ${trendNote}`.trim();
+  const metrics: PhaseMetric[] = [
+    ...(mlPhase.metrics ?? []),
+    ...trendsMetrics(trends),
+  ];
+
+  return {
+    ...mlPhase,
+    score: roundOne(newScore),
+    analysis,
+    metrics,
+  };
+}
+
+function trendGrowthAdjustment(growthRatio: number): number {
+  if (growthRatio >= 1.5) return 1.5;
+  if (growthRatio >= 1.2) return 1;
+  if (growthRatio >= 1.0) return 0.3;
+  if (growthRatio >= 0.8) return 0;
+  if (growthRatio >= 0.5) return -1;
+  return -1.5;
+}
+
+function trendsMetrics(trends: TrendsTimeline): PhaseMetric[] {
+  const growthLabel =
+    trends.growth_ratio >= 1.2
+      ? `↑ ${Math.round((trends.growth_ratio - 1) * 100)}%`
+      : trends.growth_ratio < 0.8
+        ? `↓ ${Math.round((1 - trends.growth_ratio) * 100)}%`
+        : "Estable";
+
+  return [
+    {
+      label: "Interés 12m (Google)",
+      value: `${trends.overall_avg}/100`,
+      raw: trends.overall_avg,
+    },
+    {
+      label: "Últimos 3m vs previos",
+      value: growthLabel,
+      raw: trends.growth_ratio,
+    },
+    {
+      label: "Pico estacional",
+      value: trends.peak_month ?? "—",
+      raw: trends.peak_value,
+    },
+  ];
+}
 
 /**
  * Demanda: ¿la gente está COMPRANDO este producto en el país?
@@ -383,6 +477,40 @@ function buildCompetitionAnalysis(agg: MLSearchAggregate): string {
     );
   }
 
+  return lines.join(" ");
+}
+
+function buildTrendNote(trends: TrendsTimeline): string {
+  if (trends.growth_ratio >= 1.2) {
+    return `Google Trends ${trends.geo}: interés ${trends.overall_avg}/100 en 12m y subiendo ${Math.round((trends.growth_ratio - 1) * 100)}% en el último trimestre — tendencia favorable.`;
+  }
+  if (trends.growth_ratio < 0.8) {
+    return `Google Trends ${trends.geo}: interés cayendo ${Math.round((1 - trends.growth_ratio) * 100)}% en el último trimestre — cuidado, puede ser un fade.`;
+  }
+  return `Google Trends ${trends.geo}: interés estable (${trends.overall_avg}/100 promedio 12m).`;
+}
+
+function buildTrendsOnlyDemandAnalysis(trends: TrendsTimeline): string {
+  const lines: string[] = [];
+  lines.push(
+    `Mercado Libre no devolvió datos, pero Google Trends ${trends.geo} muestra un interés promedio de ${trends.overall_avg}/100 en los últimos 12 meses.`,
+  );
+  if (trends.growth_ratio >= 1.2) {
+    lines.push(
+      `Tendencia creciente: ${Math.round((trends.growth_ratio - 1) * 100)}% más interés en el último trimestre vs los 9 meses anteriores.`,
+    );
+  } else if (trends.growth_ratio < 0.8) {
+    lines.push(
+      `Tendencia decreciente: ${Math.round((1 - trends.growth_ratio) * 100)}% menos interés en el último trimestre — el producto puede estar pasando de moda.`,
+    );
+  } else {
+    lines.push("Interés estable, sin tendencia clara hacia arriba o abajo.");
+  }
+  if (trends.peak_month) {
+    lines.push(
+      `Pico de interés en ${trends.peak_month} (valor ${trends.peak_value}/100) — útil para detectar estacionalidad.`,
+    );
+  }
   return lines.join(" ");
 }
 

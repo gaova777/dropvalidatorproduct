@@ -6,6 +6,7 @@ import { ProductForm } from "./ProductForm";
 import { PhaseCard, type PhaseKey } from "./PhaseCard";
 import { MarginCalculator } from "./MarginCalculator";
 import { VerdictCard } from "./VerdictCard";
+import { ImageStrip } from "./ImageStrip";
 import { useValidation } from "@/stores/useValidation";
 import { validateProduct } from "@/lib/api";
 import type { MarginResult, PhaseResult } from "@/lib/types";
@@ -79,6 +80,13 @@ export function ValidationFlow() {
 
       {(isRunning || result) && (
         <div className="space-y-4">
+          {result && (
+            <ImageStrip
+              images={result.images ?? []}
+              query={result.product}
+            />
+          )}
+
           {result && (
             <VerdictCard
               product={result.product}

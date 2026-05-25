@@ -46,12 +46,22 @@ export interface MarginResult extends MarginData {
   financial_score: number;
 }
 
+export interface ProductImage {
+  url: string;
+  source: string;
+  source_domain: string;
+  title: string;
+  width?: number;
+  height?: number;
+}
+
 export interface ValidationResponse {
   id?: string;
   product: string;
   niche: string;
   country: string;
   phases: ValidationPhases;
+  images?: ProductImage[];
   total_score: number;
   verdict: Verdict;
   source: "data-driven" | "agents";

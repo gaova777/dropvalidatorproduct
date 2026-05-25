@@ -4,6 +4,7 @@ import {
   getInterestOverTime,
   GoogleTrendsError,
 } from "@/lib/sources/google-trends";
+import { searchImages } from "@/lib/sources/images";
 import {
   calculatePhasesScore,
   enrichDemandWithTrends,
@@ -49,11 +50,14 @@ export async function POST(request: Request) {
     );
   }
 
-  // 1. Disparar ML y Trends en paralelo. Cada uno puede fallar independiente.
-  const [mlSettled, trendsSettled] = await Promise.allSettled([
+  // 1. Disparar ML, Trends e Images en paralelo. Cada uno puede fallar independiente.
+  const [mlSettled, trendsSettled, imagesSettled] = await Promise.allSettled([
     searchAggregate(product, country, { limit: 50 }),
     getInterestOverTime(product, country),
+    searchImages(product, 6),
   ]);
+
+  const images = imagesSettled.status === "fulfilled" ? imagesSettled.value : [];
 
   const mlAgg = mlSettled.status === "fulfilled" ? mlSettled.value : null;
   const mlError =
@@ -114,6 +118,7 @@ export async function POST(request: Request) {
     niche,
     country,
     phases,
+    images,
     total_score: totalScore,
     verdict,
     source: "data-driven",
